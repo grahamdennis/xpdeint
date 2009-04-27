@@ -15,7 +15,7 @@ from xpdeint.Geometry.SplitUniformDimensionRepresentation import SplitUniformDim
 
 from xpdeint.ParserException import ParserException
 
-from xpdeint.Utilities import lazy_property, permutations
+from xpdeint.Utilities import lazy_property, combinations
 
 import math, operator
 
@@ -143,19 +143,20 @@ class _FourierTransformFFTW3 (_Transform):
     cost *= reduce(operator.mul, [untransformedDimReps[dimName].lattice for dimName in dimNames], 1)
     return cost
   
-  def potentialTransforms(self):
+  def availableTransformations(self):
     results = []
     geometry = self.getVar('geometry')
     sortedDimNames = [(geometry.indexOfDimensionName(dimName), dimName) for dimName in self.transformNameMap]
     sortedDimNames.sort()
     sortedDimNames = [o[1] for o in sortedDimNames]
     for dimName in sortedDimNames:
-      dimReps = geometry.dimensionWithName(dimName).representations
-      for oldDimRep, newDimRep in permutations(dimReps, dimReps):
-        if oldDimRep == newDimRep: continue
-        results.append(dict(oldBasis=oldDimRep.name,
-                            newBasis=newDimRep.name,
-                            cost=oldDimRep.lattice * math.log(oldDimRep.lattice)))
+      # FIXME: The 0:2 slice in the following is to prevent double-up due to the current use of three representations
+      # for distributed MPI dimensions. This won't be needed when we convert to bases internally in xpdeint.
+      dimReps = geometry.dimensionWithName(dimName).representations[0:2]
+      for basisReps in combinations(2, dimReps):
+        results.append(dict(transformations = [frozenset(rep.name for rep in basisReps)],
+                            cost = self.fftCost([dimName])))
+    
     if self.hasattr('mpiDimensions'):
       for dim in self.mpiDimensions:
         sortedDimNames.remove(dim.name)
@@ -172,8 +173,8 @@ class _FourierTransformFFTW3 (_Transform):
       cost = self.fftCost(dimNames)
       untransformedBasis = tuple([untransformedDimReps[dimName].name for dimName in dimNames])
       transformedBasis = tuple([transformedDimReps[dimName].name for dimName in dimNames])
-      results.append(dict(oldBasis=untransformedBasis, newBasis=transformedBasis, cost = cost))
-      results.append(dict(oldBasis=transformedBasis, newBasis=untransformedBasis, cost = cost))
+      bases = frozenset([untransformedBasis, transformedBasis])
+      results.append(dict(transformations = [bases], cost = cost))
     
     return results
   

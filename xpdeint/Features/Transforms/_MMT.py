@@ -139,7 +139,7 @@ class _MMT (_Transform):
     dim.addRepresentation(kspace)
     return dim
   
-  def potentialTransforms(self):
+  def availableTransformations(self):
     results = []
     geometry = self.getVar('geometry')
     # Sort dimension names based on their ordering in the geometry.
@@ -151,11 +151,9 @@ class _MMT (_Transform):
     # in-place matrix multiply.
     for dimName in sortedDimNames:
       dimReps = geometry.dimensionWithName(dimName).representations
-      for oldDimRep, newDimRep in permutations(dimReps, dimReps):
-        if oldDimRep == newDimRep: continue
-        results.append(dict(oldBasis=oldDimRep.name,
-                            newBasis=newDimRep.name,
-                            cost=oldDimRep.lattice * newDimRep.lattice))
+      for basisReps in combinations(2, dimReps):
+        results.append(dict(transformations=[frozenset(rep.name for rep in basisReps)],
+                            cost=reduce(operator.mul, [rep.lattice for rep in basisReps])))
     
     # Step two: Create 'optimised' transforms. These transform two dimensions at a time. This
     # is more optimal as we don't have to have an additional copy as we can perform the first multiply
@@ -165,21 +163,17 @@ class _MMT (_Transform):
     for dimNames in combinations(2, sortedDimNames):
       dimReps = [geometry.dimensionWithName(dimName).representations for dimName in dimNames]
       # Loop over all possible transforms between these two dimensions
-      for oldReps in permutations(*dimReps):
-        for newReps in permutations(*dimReps):
-          # Only consider the transforms in which every dimension has something change.
-          if any([old == new for old, new in zip(oldReps, newReps)]): continue
-          transform = {}
-          transform['oldDimRep'] = tuple([dimRep.name for dimRep in oldReps])
-          transform['newDimRep'] = tuple([dimRep.name for dimRep in newReps])
-          # The inherent cost of the multiply
-          costs = [oldDimRep.lattice * newDimRep.lattice for oldDimRep, newDimRep in zip(oldReps, newReps)]
-          # There is a multiplier due to the number of these matrix multiplies we need
-          costMultipliers = [min(oldDimRep.lattice, newDimRep.lattice) for oldDimRep, newDimRep in zip(oldReps, newReps)]
-          # The cost for each transform should be multiplied by the smallest size of each other dimension (due to ordering)
-          for idx, cost in enumerate(costs):
-            costs[idx] *= reduce(operator.mul, costMultipliers[0:idx] + costMultipliers[idx+1:], 1)
-          transform['cost'] = reduce(operator.add, costs)
-          results.append(transform)
+      for repPairs in combinations(2, *dimReps):
+        transform = dict(transformations=[frozenset(tuple(rep.name for rep in reps) for reps in repPairs)])
+        costs = [reduce(operator.mul, [rep.lattice for rep in reps]) for reps in repPairs]
+        # There is a multiplier due to the number of these matrix multiplies we need
+        costMultipliers = [reduce(operator.min, [rep.lattice for rep in reps]) for reps in repPairs]
+        # The cost for each transform should be multiplied by the smallest size of each other dimension (due to ordering)
+        for idx, cost in enumerate(costs[:]):
+          costs[idx] *= reduce(operator.mul, costMultipliers[0:idx] + costMultipliers[idx+1:], 1)
+        transform['cost'] = reduce(operator.add, costs)
+        results.append(transform)
     return results
+  
+  
 

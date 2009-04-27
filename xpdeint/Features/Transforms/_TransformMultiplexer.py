@@ -8,7 +8,9 @@ Copyright (c) 2008 __MyCompanyName__. All rights reserved.
 """
 
 from xpdeint.Features._Feature import _Feature
-from xpdeint.Utilities import lazy_property
+from xpdeint.Utilities import lazy_property, DijkstraSearch
+
+import operator
 
 class _TransformMultiplexer (_Feature):
   featureName = 'TransformMultiplexer'
@@ -17,6 +19,7 @@ class _TransformMultiplexer (_Feature):
   def __init__(self, *args, **KWs):
     _Feature.__init__(self, *args, **KWs)
     self.transforms = set()
+    self.availableTransformations = []
   
   def transformsForVector(self, vector):
     return set([dim.transform for dim in vector.field.dimensions if dim.transform.hasattr('goSpaceFunctionContentsForVector')])
@@ -68,5 +71,75 @@ class _TransformMultiplexer (_Feature):
     else:
       return attr
     
-  
+  def preflight(self):
+    super(_TransformMultiplexer, self).preflight()
+    for transform in self.transforms:
+      if hasattr(transform, 'availableTransformations'):
+        self.availableTransformations.extend(transform.availableTransformations())
+    print self.availableTransformations
+    
+  def buildTransformMap(self):
+    # The mighty plan is to do the following for each vector:
+    # 1. Convert all required spaces to the new-style spaces
+    
+    def transformedBasis(basis, transformationPair):
+      transformationPair = list(transformationPair)
+      if not isinstance(basis, tuple): basis = tuple([basis])
+      for sourceBasis, destBasis in [transformationPair, reversed(transformationPair)]:
+        if not isinstance(sourceBasis, tuple): sourceBasis = tuple([sourceBasis])
+        if not isinstance(destBasis, tuple): destBasis = tuple([destBasis])
+        
+        for offset in range(0, len(basis)+1-len(sourceBasis)):
+          if basis[offset:offset+len(sourceBasis)] == sourceBasis:
+            basis = list(basis)
+            basis[offset:offset+len(sourceBasis)] = destBasis
+            basis = tuple(basis)
+            return basis, sourceBasis
+      return None, None
+    
+    class BasisState(DijkstraSearch.State):
+      __slots__ = []
+      availableTransformations = self.availableTransformations
+      
+      def next(self):
+        results = []
+        for transformation in self.availableTransformations:
+          transformationPairs = transformation['transformations']
+          for transformationPair in transformationPairs:
+            resultBasis, matchedSourceBasis = transformedBasis(self.location, transformationPair)
+            if resultBasis:
+              costMultiplier = reduce(
+                operator.mul,
+                [self.representationMap[repName.split()[-1]].lattice for repName in self.location if not repName in matchedSourceBasis],
+                1
+              )
+              
+              newCost = [costMultiplier * int(transformation.get(key, 0)) for key in ['communicationsCost', 'cost']]
+              newCost = tuple(old + new for old, new in zip(self.cost, newCost))
+              newState = BasisState(newCost, resultBasis, previous = self.location)
+              results.append(newState)
+        return results
+    
+    def convertSpaceInFieldToBasis(space, field):
+      return tuple(dim.inSpace(space).name for dim in field.dimensions)
+    
+    vectors = [v for v in self.getVar('vectors') if v.needsTransforms]
+    driver = self._driver
+    for vector in vectors:
+      basesNeeded = set(convertSpaceInFieldToBasis(space, vector.field) for space in vector.spacesNeeded)
+      basesNeeded = set(driver.canonicalBasisForBasis(basis) for basis in basesNeeded)
+      print vector.id, basesNeeded
+      
+      # Next step: Perform Dijkstra search over the provided transforms to find the optimal transform map.
+      representationMap = dict()
+      for dim in vector.field.dimensions:
+        representationMap.update((rep.name, rep) for rep in dim.representations)
+      BasisState.representationMap = representationMap
+      transformsNeeded = set()
+      for basis in basesNeeded:
+        startState = BasisState((0, 0), basis)
+        print basis, DijkstraSearch.perform(startState)
+    
+    
+    
 
