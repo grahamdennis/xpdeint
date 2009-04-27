@@ -10,6 +10,8 @@ Copyright (c) 2008 __MyCompanyName__. All rights reserved.
 from xpdeint.ParserException import ParserException
 import re
 
+from heapq import heapify, heappush, heappop
+
 class lazy_property(object):
   """
   A data descriptor that provides a default value for the attribute
@@ -183,18 +185,62 @@ def permutations(*iterables):
     
     return it
 
-def combinations(itemCount, lst):
-    """Generator for all unique combinations of `lst` containing `itemCount` elements."""
-    if itemCount == 0 or itemCount > len(lst):
-        return
-    if itemCount == 1:
-        for o in lst:
-            yield (o,)
-    elif itemCount == len(lst):
-        yield tuple(lst)
-    else:
-        for o in combinations(itemCount-1, lst[1:]):
-            yield (lst[0],) + o
-        for o in combinations(itemCount, lst[1:]):
-            yield o
+def combinations(itemCount, *lsts):
+    """Generator for all unique combinations of each list in `lsts` containing `itemCount` elements."""
+    def _combinations(itemCount, lst):
+        if itemCount == 0 or itemCount > len(lst):
+            return
+        if itemCount == 1:
+            for o in lst:
+                yield (o,)
+        elif itemCount == len(lst):
+            yield tuple(lst)
+        else:
+            for o in _combinations(itemCount-1, lst[1:]):
+                yield (lst[0],) + o
+            for o in _combinations(itemCount, lst[1:]):
+                yield o
+    if len(lsts) == 1:
+        return _combinations(itemCount, lsts[0])
+    iterables = [list(_combinations(itemCount, lst)) for lst in lsts]
+    return permutations(*iterables)
+
+
+class DijkstraSearch(object):
+    class State(object):
+        __slots__ = ['cost', 'location', 'previous']
+        def __init__(self, cost, location, previous = None):
+            self.cost = cost
+            self.location = location
+            self.previous = previous
+        
+        def next(self):
+            # To be implemented by subclass
+            assert False
+        
+    
+    class NodeInfo(object):
+        __slots__ = ['minCost', 'previous']
+        def __init__(self, minCost, previous = None):
+            self.minCost = minCost
+            self.previous = set()
+            if previous: self.previous.add(previous)
+        
+    @staticmethod
+    def perform(start):
+        queue = [(start.cost, start)]
+        shortestPaths = dict()
+        shortestPaths[start.location] = DijkstraSearch.NodeInfo(start.cost)
+        while queue:
+            currentState = heappop(queue)[1]
+            if not currentState.location in shortestPaths:
+              shortestPaths[currentState.location] = DijkstraSearch.NodeInfo(currentState.cost)
+            if shortestPaths[currentState.location].minCost == currentState.cost:
+              shortestPaths[currentState.location].previous.add(currentState.previous)
+              for nextState in currentState.next():
+                  if nextState.location in shortestPaths and shortestPaths[nextState.location].minCost < nextState.cost:
+                      continue
+                  heappush(queue, (nextState.cost, nextState))
+        return shortestPaths
+    
 
