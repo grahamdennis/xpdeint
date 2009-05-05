@@ -207,7 +207,22 @@ def combinations(itemCount, *lsts):
 
 
 class DijkstraSearch(object):
+    """
+    A Dijkstra search is an algorithm to search for the least-cost
+    route between one node and all other nodes in a graph.
+    
+    Typically, only one of the least-cost solutions are desired, however
+    as we will have some additional criteria to apply later to the returned
+    paths, this implementation returns all of the least-cost paths between
+    two nodes.
+    """
     class State(object):
+        """
+        A helper class to store information about a given node, the cost to get there
+        and the step that was used to get to this node.
+        
+        It is intended that this class be subclassed for use in searches.
+        """
         __slots__ = ['cost', 'location', 'previous']
         def __init__(self, cost, location, previous = None):
             self.cost = cost
@@ -215,11 +230,22 @@ class DijkstraSearch(object):
             self.previous = previous
         
         def next(self):
-            # To be implemented by subclass
+            """
+            This function is to return the nodes reachable from this node, the costs and
+            some related information.
+            
+            This function must be implemented by a subclass.
+            """
             assert False
         
     
     class NodeInfo(object):
+        """
+        This helper class stores the information known about the minimum-cost
+        routes to a given node. This information includes the minimum cost
+        to reach this node and the previous steps that arrive at this node
+        with the minimum cost.
+        """
         __slots__ = ['minCost', 'previous']
         def __init__(self, minCost, previous = None):
             self.minCost = minCost
@@ -228,9 +254,20 @@ class DijkstraSearch(object):
         
     @staticmethod
     def perform(start):
+        """
+        This function performs the Dijkstra search from the node `start` to all
+        other reachable nodes. This information is returned in a dictionary that
+        maps a given node to a `NodeInfo` object that contains information about
+        the minimum-cost route to reach that node.
+        """
         queue = [(start.cost, start)]
         shortestPaths = dict()
         shortestPaths[start.location] = DijkstraSearch.NodeInfo(start.cost)
+        # This algorithm works by iterating over a queue considering paths in
+        # order of increasing cost. As a path is considered, every possible
+        # single-step extension to this path is considered and added to the queue.
+        # Eventually the queue empties when the only paths contained are more expensive
+        # versions of paths that have already been considered.
         while queue:
             currentState = heappop(queue)[1]
             if not currentState.location in shortestPaths:
