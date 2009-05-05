@@ -139,7 +139,7 @@ class _FourierTransformFFTW3 (_Transform):
   def fftCost(self, dimNames):
     geometry = self.getVar('geometry')
     untransformedDimReps = dict([(dimName, geometry.dimensionWithName(dimName).representations[0]) for dimName in dimNames])
-    cost = reduce(operator.add, [math.log(untransformedDimReps[dimName].lattice) for dimName in dimNames], 0)
+    cost = sum([int(math.ceil(math.log(untransformedDimReps[dimName].lattice))) for dimName in dimNames], 0)
     cost *= reduce(operator.mul, [untransformedDimReps[dimName].lattice for dimName in dimNames], 1)
     return cost
   
@@ -149,13 +149,25 @@ class _FourierTransformFFTW3 (_Transform):
     sortedDimNames = [(geometry.indexOfDimensionName(dimName), dimName) for dimName in self.transformNameMap]
     sortedDimNames.sort()
     sortedDimNames = [o[1] for o in sortedDimNames]
+    
+    transformFunctions = dict(
+      transformSpecifier = self.transformSpecifier,
+      transformGlobals = self.transformGlobals,
+      transformInitialise = self.transformInitialise,
+      transformFinalise = self.transformFinalise
+    )
+    
     for dimName in sortedDimNames:
       # FIXME: The 0:2 slice in the following is to prevent double-up due to the current use of three representations
       # for distributed MPI dimensions. This won't be needed when we convert to bases internally in xpdeint.
       dimReps = geometry.dimensionWithName(dimName).representations[0:2]
       for basisReps in combinations(2, dimReps):
-        results.append(dict(transformations = [frozenset(rep.name for rep in basisReps)],
-                            cost = self.fftCost([dimName])))
+        results.append(dict(
+          transformations = [frozenset(rep.name for rep in basisReps)],
+          cost = self.fftCost([dimName]),
+          requiresScaling = True,
+          **transformFunctions
+        ))
     
     if self.hasattr('mpiDimensions'):
       for dim in self.mpiDimensions:
@@ -174,8 +186,41 @@ class _FourierTransformFFTW3 (_Transform):
       untransformedBasis = tuple([untransformedDimReps[dimName].name for dimName in dimNames])
       transformedBasis = tuple([transformedDimReps[dimName].name for dimName in dimNames])
       bases = frozenset([untransformedBasis, transformedBasis])
-      results.append(dict(transformations = [bases], cost = cost))
+      results.append(dict(
+        transformations = [bases],
+        cost = cost,
+        requiresScaling = True,
+        **transformFunctions
+      ))
     
-    return results
+    final_transforms = []
+    for transform in results:
+      final_transforms.append(transform.copy())
+      transform['outOfPlace'] = True
+      final_transforms.append(transform)
+    
+    return final_transforms
+  
+  def transformSpecifier(self, transformPair, vector, prefixBasis, postfixBasis, representationMap):
+    mpiPrefix = [basisName for basisName in prefixBasis if not basisName in representationMap]
+    mpiPrefix = mpiPrefix[0] if mpiPrefix else None
+    
+    prefixLattice = reduce(
+      operator.mul,
+      [representationMap[basisName].lattice
+        for basisName in prefixBasis if basisName in representationMap],
+      1
+    )
+    
+    postfixLattice = reduce(
+      operator.mul,
+      [representationMap[basisName].lattice for basisName in postfixBasis],
+      1
+    )
+    postfixLattice *= vector.nComponents
+    if vector.type == 'complex':
+      postfixLattice *= 2
+    
+    return (mpiPrefix, prefixLattice, postfixLattice)
   
 

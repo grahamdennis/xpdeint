@@ -146,33 +146,18 @@ class _MMT (_Transform):
     sortedDimNames = [(geometry.indexOfDimensionName(dimName), dimName) for dimName in self.basisMap]
     sortedDimNames.sort()
     sortedDimNames = [o[1] for o in sortedDimNames]
-    # Step one: Create all transforms just for each dimension individually
+    # Create all transforms just for each dimension individually
     # These transforms require an additional copy either at the start or end as there is no
     # in-place matrix multiply.
     for dimName in sortedDimNames:
       dimReps = geometry.dimensionWithName(dimName).representations
       for basisReps in combinations(2, dimReps):
-        results.append(dict(transformations=[frozenset(rep.name for rep in basisReps)],
-                            cost=reduce(operator.mul, [rep.lattice for rep in basisReps])))
+        results.append(dict(
+          transformations = [frozenset(rep.name for rep in basisReps)],
+          cost = reduce(operator.mul, [rep.lattice for rep in basisReps]),
+          outOfPlace = True
+        ))
     
-    # Step two: Create 'optimised' transforms. These transform two dimensions at a time. This
-    # is more optimal as we don't have to have an additional copy as we can perform the first multiply
-    # into the temporary array, and the second back into the original storage.
-    
-    # Consider all combinations of two dimensions
-    for dimNames in combinations(2, sortedDimNames):
-      dimReps = [geometry.dimensionWithName(dimName).representations for dimName in dimNames]
-      # Loop over all possible transforms between these two dimensions
-      for repPairs in combinations(2, *dimReps):
-        transform = dict(transformations=[frozenset(tuple(rep.name for rep in reps) for reps in repPairs)])
-        costs = [reduce(operator.mul, [rep.lattice for rep in reps]) for reps in repPairs]
-        # There is a multiplier due to the number of these matrix multiplies we need
-        costMultipliers = [reduce(operator.min, [rep.lattice for rep in reps]) for reps in repPairs]
-        # The cost for each transform should be multiplied by the smallest size of each other dimension (due to ordering)
-        for idx, cost in enumerate(costs[:]):
-          costs[idx] *= reduce(operator.mul, costMultipliers[0:idx] + costMultipliers[idx+1:], 1)
-        transform['cost'] = reduce(operator.add, costs)
-        results.append(transform)
     return results
   
   

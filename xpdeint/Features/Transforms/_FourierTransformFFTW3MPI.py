@@ -140,7 +140,8 @@ class _FourierTransformFFTW3MPI (FourierTransformFFTW3):
       transposeOperations.append(frozenset([basisA, basisB]))
     # transpose operations
     results.append(dict(transformations=transposeOperations,
-                        communicationsCost=communicationsCost))
+                        communicationsCost=communicationsCost,
+                        transformSpecifier=self.transformSpecifier))
     
     # Create partial forward / back operations
     untransformedBasis = ('distributed ' + self.mpiDimensions[0].representations[0].name,
@@ -153,11 +154,12 @@ class _FourierTransformFFTW3MPI (FourierTransformFFTW3):
     # Partial transform
     results.append(dict(transformations=[frozenset([untransformedBasis, transformedBasis])],
                         communicationsCost=communicationsCost,
-                        cost=transformCost))
+                        cost=transformCost,
+                        requiresScaling=True,
+                        transformSpecifier=self.transformSpecifier))
     
     # Fuller forward/reverse transforms would be good in the future for the case of more than two dimensions
     # This isn't necessary for the moment though.
-    # PROBLEM: The required bases need to be known at about preflight time.
     
     return results
   

@@ -236,7 +236,8 @@ class DijkstraSearch(object):
             if not currentState.location in shortestPaths:
               shortestPaths[currentState.location] = DijkstraSearch.NodeInfo(currentState.cost)
             if shortestPaths[currentState.location].minCost == currentState.cost:
-              shortestPaths[currentState.location].previous.add(currentState.previous)
+              if currentState.previous:
+                shortestPaths[currentState.location].previous.add(currentState.previous)
               for nextState in currentState.next():
                   if nextState.location in shortestPaths and shortestPaths[nextState.location].minCost < nextState.cost:
                       continue
