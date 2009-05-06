@@ -8,7 +8,7 @@ Copyright (c) 2008 __MyCompanyName__. All rights reserved.
 """
 
 from xpdeint.Features._Feature import _Feature
-from xpdeint.Utilities import lazy_property, DijkstraSearch
+from xpdeint.Utilities import lazy_property, combinations, DijkstraSearch
 
 import operator
 
@@ -120,15 +120,21 @@ class _TransformMultiplexer (_Feature):
       transformationPair = list(transformationPair)
       if not isinstance(basis, tuple): basis = tuple([basis])
       for sourceBasis, destBasis in [transformationPair, reversed(transformationPair)]:
-        if not isinstance(sourceBasis, tuple): sourceBasis = tuple([sourceBasis])
-        if not isinstance(destBasis, tuple): destBasis = tuple([destBasis])
+        # Optimisation: If it's just a single-dimension transform, do it the fast way
+        if not isinstance(sourceBasis, tuple):
+          if not sourceBasis in basis: continue
+          basis = list(basis)
+          offset = basis.index(sourceBasis)
+          basis[offset] = destBasis
+          basis = tuple(basis)
+          return basis, (basis[:offset], tuple([sourceBasis]), basis[offset+1:])
         
         for offset in range(0, len(basis)+1-len(sourceBasis)):
           if basis[offset:offset+len(sourceBasis)] == sourceBasis:
             basis = list(basis)
             basis[offset:offset+len(sourceBasis)] = destBasis
             basis = tuple(basis)
-            return basis, (tuple(basis[:offset]), sourceBasis, tuple(basis[offset+len(sourceBasis):]))
+            return basis, (basis[:offset], sourceBasis, basis[offset+len(sourceBasis):])
       return None, (None, None, None)
     
     class BasisState(DijkstraSearch.State):
@@ -194,20 +200,8 @@ class _TransformMultiplexer (_Feature):
             # Add that cost to the old cost
             newCost = tuple(old + new for old, new in zip(self.cost, newCost))
             
-            # The transform may decide that different actions of the same transform
-            # should be considered different transformations 
-            # (think FFT's with different numbers of points not in the FFT dimension)
-            transformSpecifier = None
-            if 'transformSpecifier' in transformation:
-              transformSpecifier = transformation['transformSpecifier'](
-                frozenset([currentBasis, resultBasis]),
-                self.vector,
-                prefixBasis,
-                postfixBasis,
-                self.representationMap
-              )
             # Create the new BasisState and add it to the list of nodes reachable from this node.
-            newState = BasisState(newCost, (resultBasis, resultState), previous = (self.location, (transformID, transformSpecifier)))
+            newState = BasisState(newCost, (resultBasis, resultState), previous = (self.location, (transformID, transformationPair)))
             results.append(newState)
         return results
       
@@ -262,28 +256,27 @@ class _TransformMultiplexer (_Feature):
     transformsNeeded = set()
     transformMap = dict()
     
-    # Loop over all vectors
+    basesFieldMap = dict()
     for vector in vectors:
-      # Find all the bases that this vector is needed in
-      basesNeeded = set(convertSpaceInFieldToBasis(space, vector.field) for space in vector.spacesNeeded)
-      basesNeeded = set(driver.canonicalBasisForBasis(basis) for basis in basesNeeded)
-      print vector.id, basesNeeded
-      
-      BasisState.vector = vector
-      
-      # Next step: Perform Dijkstra search over the provided transforms to find the optimal transform map.
+      vectorBases = set(driver.canonicalBasisForBasis(convertSpaceInFieldToBasis(space, vector.field))
+                          for space in vector.spacesNeeded)
+      if not vector.field.name in basesFieldMap:
+        basesFieldMap[vector.field.name] = set()
+      basesFieldMap[vector.field.name].update(vectorBases)
+    
+    # Next step: Perform Dijkstra search over the provided transforms to find the optimal transform map.
+    for basesNeeded in basesFieldMap.values():
       for basis in basesNeeded:
-        startState = BasisState((0, 0), (basis, (BasisState.IN_PLACE, BasisState.UNSCALED)))
+        startState = BasisState( (0, 0), (basis, (BasisState.IN_PLACE, BasisState.UNSCALED)))
         shortestPaths = DijkstraSearch.perform(startState)
         
-        # Now we want to extract useful information from this
+        # Now we need to extract useful information from this
         for aBasis in [b for b in basesNeeded if not b == basis]:
           transformationPair = frozenset([basis, aBasis])
           # If we already have an entry for this transformationPair, then we don't need to consider it.
           if transformationPair in transformMap: continue
           # Now to obtain concrete lists of potential transform steps
           paths = pathsFromBasisToBasis(basis, aBasis, shortestPaths)
-          print 'paths', paths
           
           # Now we need to rank the bloody things. And it has to be stable from one run to the next.
           # Ordering: Least steps, least out-of-place operations, most reused transforms, alphabetic
@@ -299,7 +292,6 @@ class _TransformMultiplexer (_Feature):
           # Perform an ascending sort
           rankedPaths.sort()
           path = rankedPaths[0][-1]
-          print path, path[1::2], path[:-2:2], path[2::2]
           # Add the transforms needed for this path to the list of transforms we need. This way
           # we can try and re-use already-used transforms when there is a choice between two
           # paths that would otherwise have the same rank
@@ -307,6 +299,33 @@ class _TransformMultiplexer (_Feature):
           transformMap[transformationPair] = path
       
     print transformMap
+    
+    transformsNeeded.clear()
+    for vector in vectors:
+      vectorBases = set(driver.canonicalBasisForBasis(convertSpaceInFieldToBasis(space, vector.field))
+                          for space in vector.spacesNeeded)
+      for transformationPair in combinations(2, vectorBases):
+        transformationPair = frozenset(transformationPair)
+        path = transformMap[transformationPair]
+        for transformID, basisPair in path[1::2]:
+          # The transform may decide that different actions of the same transform
+          # should be considered different transformations
+          # (think FFT's with different numbers of points not in the FFT dimension)
+          transformSpecifier = None
+          transformation = self.availableTransformations[transformID]
+          if 'transformSpecifier' in transformation:
+            currentBasis = list(transformationPair)[0]
+            resultBasis, (prefixBasis, matchedSourceBasis, postfixBasis) = transformedBasis(currentBasis, transformationPair)
+            
+            transformSpecifier = transformation['transformSpecifier'](
+              basisPair,
+              vector,
+              prefixBasis,
+              postfixBasis,
+              representationMap
+            )
+          transformsNeeded.add((transformID, transformSpecifier))
+    
     print transformsNeeded
     # Now we need to extract the transforms and include that information in choosing transforms
     # One advantage of this method is that we no longer have to make extra fft plans or matrices when we could just re-use others.
