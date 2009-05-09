@@ -141,7 +141,8 @@ class _FourierTransformFFTW3MPI (FourierTransformFFTW3):
     # transpose operations
     results.append(dict(transformations=transposeOperations,
                         communicationsCost=communicationsCost,
-                        transformSpecifier=self.transformSpecifier))
+                        transformSpecifier=self.transformSpecifier,
+                        transformType='r2r'))
     
     # Create partial forward / back operations
     untransformedBasis = ('distributed ' + self.mpiDimensions[0].representations[0].name,
@@ -156,6 +157,7 @@ class _FourierTransformFFTW3MPI (FourierTransformFFTW3):
                         communicationsCost=communicationsCost,
                         cost=transformCost,
                         requiresScaling=True,
+                        transformType='c2c' if self.transformNameMap[self.mpiDimensions[0].name] == 'dft' else 'r2r',
                         transformSpecifier=self.transformSpecifier))
     
     # Fuller forward/reverse transforms would be good in the future for the case of more than two dimensions

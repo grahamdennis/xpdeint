@@ -304,27 +304,25 @@ class _TransformMultiplexer (_Feature):
     for vector in vectors:
       vectorBases = set(driver.canonicalBasisForBasis(convertSpaceInFieldToBasis(space, vector.field))
                           for space in vector.spacesNeeded)
-      for transformationPair in combinations(2, vectorBases):
-        transformationPair = frozenset(transformationPair)
-        path = transformMap[transformationPair]
-        for transformID, basisPair in path[1::2]:
+      for basisPair in combinations(2, vectorBases):
+        basisPair = frozenset(basisPair)
+        path = transformMap[basisPair]
+        for (currentBasis, basisState), (transformID, transformPair) in zip(path[:-2:2], path[1::2]):
           # The transform may decide that different actions of the same transform
           # should be considered different transformations
           # (think FFT's with different numbers of points not in the FFT dimension)
           transformSpecifier = None
           transformation = self.availableTransformations[transformID]
           if 'transformSpecifier' in transformation:
-            currentBasis = list(transformationPair)[0]
-            resultBasis, (prefixBasis, matchedSourceBasis, postfixBasis) = transformedBasis(currentBasis, transformationPair)
-            
+            resultBasis, (prefixBasis, matchedSourceBasis, postfixBasis) = transformedBasis(currentBasis, transformPair)
             transformSpecifier = transformation['transformSpecifier'](
-              basisPair,
+              self.availableTransformations[transformID],
               vector,
               prefixBasis,
               postfixBasis,
               representationMap
             )
-          transformsNeeded.add((transformID, transformSpecifier))
+          transformsNeeded.add((transformID, transformSpecifier, transformPair))
     
     print transformsNeeded
     # Now we need to extract the transforms and include that information in choosing transforms
@@ -332,12 +330,12 @@ class _TransformMultiplexer (_Feature):
     # Not only do we need to extract the transforms, but we must also produce a simple list of transforms that must be applied
     # to change between any bases for this vector.
     
-    for transformID, transformSpecifier in transformsNeeded:
+    for transformID, transformSpecifier, transformPair in transformsNeeded:
       transformation = self.availableTransformations[transformID].copy()
       transformation['transformSpecifier'] = transformSpecifier
       del transformation['transformations']
-      # transformation['transformPair'] = transformPair
+      transformation['transformPair'] = transformPair
       self.neededTransformations.append(transformation)
-    print self.neededTransformations
+    # print self.neededTransformations
   
 

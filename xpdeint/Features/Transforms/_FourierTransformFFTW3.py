@@ -166,6 +166,7 @@ class _FourierTransformFFTW3 (_Transform):
           transformations = [frozenset(rep.name for rep in basisReps)],
           cost = self.fftCost([dimName]),
           requiresScaling = True,
+          transformType = 'c2c' if self.transformNameMap[dimName] == 'dft' else 'r2r',
           **transformFunctions
         ))
     
@@ -180,7 +181,7 @@ class _FourierTransformFFTW3 (_Transform):
     transformedDimReps = dict([(dimName, geometry.dimensionWithName(dimName).representations[1]) for dimName in sortedDimNames])
     
     # Create optimised forward/backward transforms
-    for dimNames in [c2cDimNames, r2rDimNames]:
+    for dimNames, transformType in [(c2cDimNames, 'c2c'), (r2rDimNames, 'r2r')]:
       if len(dimNames) <= 1: continue
       cost = self.fftCost(dimNames)
       untransformedBasis = tuple([untransformedDimReps[dimName].name for dimName in dimNames])
@@ -190,6 +191,7 @@ class _FourierTransformFFTW3 (_Transform):
         transformations = [bases],
         cost = cost,
         requiresScaling = True,
+        transformType = transformType,
         **transformFunctions
       ))
     
@@ -201,7 +203,7 @@ class _FourierTransformFFTW3 (_Transform):
     
     return final_transforms
   
-  def transformSpecifier(self, transformPair, vector, prefixBasis, postfixBasis, representationMap):
+  def transformSpecifier(self, transformDict, vector, prefixBasis, postfixBasis, representationMap):
     mpiPrefix = [basisName for basisName in prefixBasis if not basisName in representationMap]
     mpiPrefix = mpiPrefix[0] if mpiPrefix else None
     
@@ -218,7 +220,9 @@ class _FourierTransformFFTW3 (_Transform):
       1
     )
     postfixLattice *= vector.nComponents
-    if vector.type == 'complex':
+    
+    print transformDict
+    if transformDict['transformType'] is 'r2r' and vector.type == 'complex':
       postfixLattice *= 2
     
     return (mpiPrefix, prefixLattice, postfixLattice)

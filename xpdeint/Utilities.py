@@ -196,6 +196,8 @@ def combinations(itemCount, *lsts):
         elif itemCount == len(lst):
             yield tuple(lst)
         else:
+            if not isinstance(lst, list):
+              lst = list(lst)
             for o in _combinations(itemCount-1, lst[1:]):
                 yield (lst[0],) + o
             for o in _combinations(itemCount, lst[1:]):
