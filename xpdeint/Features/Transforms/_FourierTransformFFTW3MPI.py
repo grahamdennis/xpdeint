@@ -137,12 +137,15 @@ class _FourierTransformFFTW3MPI (FourierTransformFFTW3):
       if not communicationsCost: communicationsCost = firstDimRep.lattice * secondDimRep.lattice
       basisA = ('distributed ' + firstDimRep.name, secondDimRep.name)
       basisB = ('distributed ' + secondDimRep.name, firstDimRep.name)
-      transposeOperations.append(frozenset([basisA, basisB]))
+      transposeOperations.append(tuple([basisA, basisB]))
     # transpose operations
-    results.append(dict(transformations=transposeOperations,
-                        communicationsCost=communicationsCost,
-                        transformSpecifier=self.transformSpecifier,
-                        transformType='r2r'))
+    results.append(dict(
+      transformations = transposeOperations,
+      communicationsCost = communicationsCost,
+      geometryDependent = True,
+      transformType = 'real',
+      transformFunction = self.transposeTransformFunction
+    ))
     
     # Create partial forward / back operations
     untransformedBasis = ('distributed ' + self.mpiDimensions[0].representations[0].name,
@@ -153,12 +156,17 @@ class _FourierTransformFFTW3MPI (FourierTransformFFTW3):
     transformCost = self.fftCost([dim.name for dim in self.mpiDimensions])
     
     # Partial transform
-    results.append(dict(transformations=[frozenset([untransformedBasis, transformedBasis])],
-                        communicationsCost=communicationsCost,
-                        cost=transformCost,
-                        requiresScaling=True,
-                        transformType='c2c' if self.transformNameMap[self.mpiDimensions[0].name] == 'dft' else 'r2r',
-                        transformSpecifier=self.transformSpecifier))
+    results.append(dict(
+      transformations = [tuple([untransformedBasis, transformedBasis])],
+      communicationsCost = communicationsCost,
+      cost = transformCost,
+      forwardScale = self.scaleFactorForDimReps(untransformedBasis),
+      backwardScale = self.scaleFactorForDimReps(transformedBasis),
+      requiresScaling = True,
+      transformType = 'complex' if self.transformNameMap[self.mpiDimensions[0].name] == 'dft' else 'real',
+      geometryDependent = True,
+      transformFunction = self.distributedTransformFunction
+    ))
     
     # Fuller forward/reverse transforms would be good in the future for the case of more than two dimensions
     # This isn't necessary for the moment though.

@@ -8,7 +8,8 @@ Copyright (c) 2008 __MyCompanyName__. All rights reserved.
 """
 
 from xpdeint.Features._Feature import _Feature
-from xpdeint.Utilities import lazy_property, combinations, DijkstraSearch
+from xpdeint.Utilities import lazy_property, combinations, GeneralisedBidirectionalSearch
+from xpdeint.Function import Function
 
 import operator
 
@@ -21,6 +22,7 @@ class _TransformMultiplexer (_Feature):
     self.transforms = set()
     self.availableTransformations = []
     self.neededTransformations = []
+    self.transformations = []
   
   def transformsForVector(self, vector):
     return set([dim.transform for dim in vector.field.dimensions if dim.transform.hasattr('goSpaceFunctionContentsForVector')])
@@ -76,34 +78,42 @@ class _TransformMultiplexer (_Feature):
     super(_TransformMultiplexer, self).preflight()
     for transform in self.transforms:
       if hasattr(transform, 'availableTransformations'):
-        self.availableTransformations.extend(transform.availableTransformations())
+        for transformation in transform.availableTransformations():
+          transformation.setdefault('owner', transform)
+          self.availableTransformations.append(transformation)
     # We need to add a few transforms of our own.
     
     # Out-of-place copy
-    self.availableTransformations.append(dict(
-      transformations = [frozenset()],
+    self.oopCopy = dict(
+      owner = self,
+      transformations = [tuple()],
       cost = 1,
-      outOfPlace = True
-    ))
+      outOfPlace = True,
+      transformFunction = self.oopCopyTransformFunction,
+      description = 'Out-of-place copy',
+    )
+    self.availableTransformations.append(self.oopCopy)
     
     # In-place multiply
-    self.availableTransformations.append(dict(
-      transformations = [frozenset()],
+    self.ipMultiply = dict(
+      owner = self,
+      transformations = [tuple()],
       cost = 1,
-      scaling = True
-    ))
+      scaling = True,
+      transformFunction = self.ipMultiplyTransformFunction,
+      description = 'In-place multiply',
+    )
     
     # Out-of-place multiply
-    self.availableTransformations.append(dict(
-      transformations = [frozenset()],
+    self.oopMultiply = dict(
+      owner = self,
+      transformations = [tuple()],
       cost = 2,
       outOfPlace = True,
-      scaling = True
-    ))
-    print self.availableTransformations
-  
-  def globals(self):
-    return '\n'.join([t['transformGlobals'](t) for t in self.neededTransformations if 'transformGlobals' in t])
+      scaling = True,
+      transformFunction = self.oopMultiplyTransformFunction,
+      description = 'Out-of-place multiply',
+    )
   
   def buildTransformMap(self):
     # The mighty plan is to do the following for each vector:
@@ -117,7 +127,6 @@ class _TransformMultiplexer (_Feature):
       """
       if not transformationPair: return basis, (basis, tuple(), tuple())
       
-      transformationPair = list(transformationPair)
       if not isinstance(basis, tuple): basis = tuple([basis])
       for sourceBasis, destBasis in [transformationPair, reversed(transformationPair)]:
         # Optimisation: If it's just a single-dimension transform, do it the fast way
@@ -137,7 +146,7 @@ class _TransformMultiplexer (_Feature):
             return basis, (basis[:offset], sourceBasis, basis[offset+len(sourceBasis):])
       return None, (None, None, None)
     
-    class BasisState(DijkstraSearch.State):
+    class BasisState(GeneralisedBidirectionalSearch.State):
       """
       This class represents a node in the transform graph. This node specifies
       both the current basis and also whether the data for the vector being
@@ -152,8 +161,6 @@ class _TransformMultiplexer (_Feature):
       
       IN_PLACE = 0
       OUT_OF_PLACE = 1
-      UNSCALED = 0
-      SCALED = 1
       
       def next(self):
         """
@@ -165,6 +172,15 @@ class _TransformMultiplexer (_Feature):
         results = []
         
         currentBasis, currentState = self.location
+        
+        # FIXME: Dodgy hack that can be removed when 'distributed y' has a dimRep
+        missingRepNames = [repName for repName in currentBasis if not repName in self.representationMap]
+        for missingRepName in missingRepNames:
+          if missingRepName.startswith('distributed '):
+            self.representationMap[missingRepName] = self.representationMap[missingRepName[len('distributed '):]]
+          else:
+            self.representationMap[missingRepName] = self.representationMap['distributed ' + missingRepName]
+        
         # Loop through all available transforms
         for transformID, transformation in enumerate(self.availableTransformations):
           # Loop through all basis-changes this 'transform' can handle
@@ -175,85 +191,81 @@ class _TransformMultiplexer (_Feature):
             
             # The cost specified in the transform is per-point in dimensions not listed in the transformationPair
             # So we must multiply that cost by the product of the number of points in all other dimensions
+            
             costMultiplier = reduce(
               operator.mul,
-              [self.representationMap[repName.split()[-1]].lattice \
+              [self.representationMap[repName].lattice \
                 for repName in currentBasis if not repName in matchedSourceBasis],
               1
             )
             
+            newCost = list(self.cost)
+            
             # This transformation may change the state and/or the basis.
             # Here we consider state changes like in-place <--> out-of-place
             # and multiplying the data by a constant
-            resultState = list(currentState)
+            resultState = currentState
             if transformation.get('outOfPlace', False):
-              resultState[0] = {
+              resultState = {
                 BasisState.IN_PLACE: BasisState.OUT_OF_PLACE,
                 BasisState.OUT_OF_PLACE: BasisState.IN_PLACE
-              }[currentState[0]]
-            if transformation.get('scaling', False):
-              resultState[1] = BasisState.SCALED
-            resultState = tuple(resultState)
+              }[currentState]
+              newCost[3] += 1 # Number of out-of-place operations
             
             # Multiply the costMultiplier through the cost listed by the transform
-            newCost = [costMultiplier * transformation.get(key, 0) for key in ['communicationsCost', 'cost']]
+            newCost[0:2] = [costMultiplier * transformation.get(key, 0) for key in ['communicationsCost', 'cost']]
+            newCost[2] += 1 # Number of steps
             # Add that cost to the old cost
             newCost = tuple(old + new for old, new in zip(self.cost, newCost))
             
             # Create the new BasisState and add it to the list of nodes reachable from this node.
-            newState = BasisState(newCost, (resultBasis, resultState), previous = (self.location, (transformID, transformationPair)))
+            newState = BasisState(
+              newCost,
+              (resultBasis, resultState),
+              self.source,
+              previous = self.location,
+              transformation = (transformID, transformationPair)
+            )
             results.append(newState)
         return results
       
+    def pathFromBasisToBasis(start, endID, pathInfo):
+      """
+      Given a dictionary of shortest paths provided by a GeneralisedBidirectional search, determine
+      the actual path that connects the basis `start` and the basis `end`.
+      """
+      # Final state must be net in-place.
+      # But we may or may not need scaling
+      loc = start
+      path = [loc]
+      
+      while loc:
+        path.append(pathInfo[loc].transformations[endID])
+        path.append(pathInfo[loc].next[endID])
+        loc = pathInfo[loc].next[endID]
+      
+      path = path[:-2]
+      
+      return path
+    
     
     def convertSpaceInFieldToBasis(space, field):
       """Transforms an old-style `space` in field `field` to a new-style basis specification."""
       return tuple(dim.inSpace(space).name for dim in field.dimensions)
     
-    def pathsFromBasisToBasis(start, end, shortestPaths):
-      """
-      Given a dictionary of shortest paths provided by a Dijkstra search, determine
-      the actual paths that connect the basis `start` and the basis `end`. The returned
-      paths will only include valid paths. For example, if a FFT is included in a path,
-      the path must also include a scaling operation somewhere.
-      """
-      # Final state must be net in-place.
-      # But we may or may not need scaling
-      scaled = BasisState.UNSCALED
-      stack = [(end, (BasisState.IN_PLACE, scaled))]
-      result = []
-      
-      startState = (start, (BasisState.IN_PLACE, BasisState.UNSCALED))
-      
-      def _paths():
-        if not stack[-1] in shortestPaths: return
-        for basisAndState, (transformID, transformSpecifier) in shortestPaths[stack[-1]].previous:
-          if not scaled and BasisState.availableTransformations[transformID].get('requiresScaling', False):
-            continue
-          stack.extend([(transformID, transformSpecifier), basisAndState])
-          if basisAndState == startState:
-            result.append(list(reversed(stack)))
-          else:
-            _paths()
-          del stack[-2:]
-      
-      _paths()
-      
-      scaled = BasisState.SCALED
-      stack = [(end, (BasisState.IN_PLACE, scaled))]
-      _paths()
-      
-      return result
-    
     geometry = self.getVar('geometry')
     representationMap = dict()
-    for dim in geometry.dimensions:
-      representationMap.update((rep.name, rep) for rep in dim.representations)
+    representationMap.update((rep.canonicalName, rep) for dim in geometry.dimensions for rep in dim.representations)
+    distributedRepresentations = [rep for dim in geometry.dimensions for rep in dim.representations if rep.hasLocalOffset]
     BasisState.representationMap = representationMap
     
-    vectors = [v for v in self.getVar('vectors') if v.needsTransforms]
+    def basisToDimRepBasis(repNameBasis):
+      if not isinstance(repNameBasis, tuple):
+        repNameBasis = tuple([repNameBasis])
+      return tuple(representationMap[dimRepName] for dimRepName in repNameBasis)
+    
+    vectors = [v for v in self.getVar('simulationVectors') if v.needsTransforms]
     driver = self._driver
-    transformsNeeded = set()
     transformMap = dict()
     
     basesFieldMap = dict()
@@ -266,65 +278,115 @@ class _TransformMultiplexer (_Feature):
     
     # Next step: Perform Dijkstra search over the provided transforms to find the optimal transform map.
     for basesNeeded in basesFieldMap.values():
-      for basis in basesNeeded:
-        startState = BasisState( (0, 0), (basis, (BasisState.IN_PLACE, BasisState.UNSCALED)))
-        shortestPaths = DijkstraSearch.perform(startState)
+      targetStates = [BasisState( (0, 0, 0, 0), (basis, BasisState.IN_PLACE), sourceID) for sourceID, basis in enumerate(basesNeeded)]
+      targetLocations = [state.location for state in targetStates]
+      print targetLocations
+      pathInfo = GeneralisedBidirectionalSearch.perform(targetStates)
+      for sourceLoc, targetLoc in combinations(2, targetLocations):
+        path = pathFromBasisToBasis(sourceLoc, targetLocations.index(targetLoc), pathInfo)
+        # While we now have the paths and we have them quickly, we just need to add the scaling operations
+        # where and if needed.
         
-        # Now we need to extract useful information from this
-        for aBasis in [b for b in basesNeeded if not b == basis]:
-          transformationPair = frozenset([basis, aBasis])
-          # If we already have an entry for this transformationPair, then we don't need to consider it.
-          if transformationPair in transformMap: continue
-          # Now to obtain concrete lists of potential transform steps
-          paths = pathsFromBasisToBasis(basis, aBasis, shortestPaths)
-          
-          # Now we need to rank the bloody things. And it has to be stable from one run to the next.
-          # Ordering: Least steps, least out-of-place operations, most reused transforms, alphabetic
-          # Because we are doing an ascending sort, but want the *most* reused transforms,
-          # we use the negative of the number of transforms we could reuse.
-          
-          # Create a list with the ranking information and the actual path
-          rankedPaths = [(len(path),
-                          sum([self.availableTransformations[tID].get('outOfPlace', False) 
-                                for tID, tS in path[1::2]], 0),
-                          -sum([td in transformsNeeded for td in path[1::2]]),
-                          path) for path in paths]
-          # Perform an ascending sort
-          rankedPaths.sort()
-          path = rankedPaths[0][-1]
-          # Add the transforms needed for this path to the list of transforms we need. This way
-          # we can try and re-use already-used transforms when there is a choice between two
-          # paths that would otherwise have the same rank
-          transformsNeeded.update([transformDescriptor for transformDescriptor in path[1::2]])
-          transformMap[transformationPair] = path
-      
-    print transformMap
+        transformMap[frozenset([sourceLoc[0], targetLoc[0]])] = path
     
-    transformsNeeded.clear()
+    self.availableTransformations.append(self.ipMultiply)
+    ipMultiplyID = self.availableTransformations.index(self.ipMultiply)
+    self.availableTransformations.append(self.oopMultiply)
+    oopMultiplyID = self.availableTransformations.index(self.oopMultiply)
+    
+    for basisPair, path in transformMap.items():
+      if any([self.availableTransformations[transformID].get('requiresScaling', False) for transformID, transformPair in path[1::2]]):
+        # Scaling is needed.
+        # There are different strategies for dealing with this.
+        # A good method would be to modify a matrix transform if we can get away with it, but that's an advanced optimisation
+        # that will be considered later.
+        # A simple optimisation is to use an out-of-place multiply instead of an out-of-place copy
+        if self.oopCopy in path:
+          # Change an out-of-place copy to an out-of-place multiply if we have one
+          path[path.index(self.oopCopy)] = (oopMultiplyID, ())
+        else:
+          # Add an in-place multiply at the end
+          path.extend([(ipMultiplyID, ()), path[-1]])
+      print basisPair, path
+    
+    self.vectorTransformMap = dict()
+    transformsNeeded = list()
+    
     for vector in vectors:
-      vectorBases = set(driver.canonicalBasisForBasis(convertSpaceInFieldToBasis(space, vector.field))
-                          for space in vector.spacesNeeded)
+      vectorBases = list(set(driver.canonicalBasisForBasis(convertSpaceInFieldToBasis(space, vector.field))
+                                for space in vector.spacesNeeded))
+      vectorBases.sort()
+      self.vectorTransformMap[vector] = dict(
+        bases = vectorBases,
+        basisPairMap = dict(),
+      )
+      
       for basisPair in combinations(2, vectorBases):
-        basisPair = frozenset(basisPair)
-        path = transformMap[basisPair]
+        basisPairSet = frozenset(basisPair)
+        path = transformMap[basisPairSet]
+        
+        basisPair = (path[0][0], path[-1][0])
+        
+        basisPairInfo = dict(
+          basisPair = basisPair,
+          forwardScale = [],
+          backwardScale = [],
+        )
+        self.vectorTransformMap[vector]['basisPairMap'][basisPairSet] = basisPairInfo
+        
+        transformSteps = []
+        
         for (currentBasis, basisState), (transformID, transformPair) in zip(path[:-2:2], path[1::2]):
           # The transform may decide that different actions of the same transform
           # should be considered different transformations
           # (think FFT's with different numbers of points not in the FFT dimension)
-          transformSpecifier = None
+          geometrySpecification = None
           transformation = self.availableTransformations[transformID]
-          if 'transformSpecifier' in transformation:
-            resultBasis, (prefixBasis, matchedSourceBasis, postfixBasis) = transformedBasis(currentBasis, transformPair)
-            transformSpecifier = transformation['transformSpecifier'](
-              self.availableTransformations[transformID],
-              vector,
-              prefixBasis,
-              postfixBasis,
-              representationMap
+          if 'requiresScaling' in transformation:
+            basisPairInfo['forwardScale'].append(transformation['forwardScale'])
+            basisPairInfo['backwardScale'].append(transformation['backwardScale'])
+          
+          resultBasis, (prefixBasis, matchedSourceBasis, postfixBasis) = transformedBasis(currentBasis, transformPair)
+          forward = True if transformPair and transformPair[0] == matchedSourceBasis else False
+          prefixDimReps = basisToDimRepBasis(prefixBasis)
+          postfixDimReps = basisToDimRepBasis(postfixBasis)
+          
+          mpiPrefix = [dimRep.localLattice for dimRep in prefixDimReps if dimRep.hasLocalOffset]
+          
+          prefixLattice = [(dimRep.lattice, dimRep.localLattice) for dimRep in prefixDimReps if not dimRep.hasLocalOffset]
+          
+          postfixLattice = [(dimRep.lattice, dimRep.localLattice) for dimRep in postfixDimReps]
+          postfixLattice.append((vector.nComponents, '_' + vector.id + '_ncomponents'))
+          
+          if transformation.get('transformType', 'real') is 'real' and vector.type == 'complex':
+            postfixLattice.append((2, '2'))
+          
+          if transformation.get('geometryDependent', False):
+            geometrySpecification = (
+              mpiPrefix,
+              reduce(operator.mul, [lattice[0] for lattice in prefixLattice], 1),
+              reduce(operator.mul, [lattice[0] for lattice in postfixLattice], 1)
             )
-          transformsNeeded.add((transformID, transformSpecifier, transformPair))
+          
+          transformDescriptor = (transformID, geometrySpecification, tuple(basisToDimRepBasis(b) for b in transformPair))
+          if transformDescriptor not in transformsNeeded:
+            transformsNeeded.append(transformDescriptor)
+          
+          prefixLatticeStrings = mpiPrefix[:]
+          prefixLatticeStrings.extend([lattice[1] for lattice in prefixLattice])
+          postfixLatticeStrings = [lattice[1] for lattice in postfixLattice]
+          
+          transformSteps.append(
+            (
+              transformsNeeded.index(transformDescriptor),
+              forward,
+              prefixLatticeStrings or ['1'],
+              postfixLatticeStrings or ['1'],
+            )
+          )
+        basisPairInfo['transformSteps'] = transformSteps
+        print basisPair, transformSteps
     
-    print transformsNeeded
     # Now we need to extract the transforms and include that information in choosing transforms
     # One advantage of this method is that we no longer have to make extra fft plans or matrices when we could just re-use others.
     # Not only do we need to extract the transforms, but we must also produce a simple list of transforms that must be applied
@@ -336,6 +398,40 @@ class _TransformMultiplexer (_Feature):
       del transformation['transformations']
       transformation['transformPair'] = transformPair
       self.neededTransformations.append(transformation)
-    # print self.neededTransformations
+    
+    def functionImplementation(func):
+      transform = func.transform
+      transformFunction = transform.get('transformFunction')
+      return transformFunction(*func.transformFunctionArgs) if transformFunction else ''
+    
+    def printBasis(basis):
+      if len(basis) == 1:
+        return basis[0].canonicalName
+      else:
+        return '(' + ', '.join(dimRep.canonicalName for dimRep in basis) + ')'
+    
+    for tID, transform in enumerate(self.neededTransformations):
+      description = transform.get('description')
+      if transform['transformPair'] and not description:
+        basisA, basisB = transform['transformPair']
+        description = "%s <---> %s transform" % (printBasis(basisA), printBasis(basisB))
+        transform['description'] = description
+      functionName = '_transform_%i' % tID
+      args = [
+        ('bool', '_forward'),
+        ('double', '_multiplier'),
+        ('real* const __restrict__', '_data_in'),
+        ('real* const __restrict__', '_data_out'),
+        ('ptrdiff_t', '_prefix_lattice'),
+        ('ptrdiff_t', '_postfix_lattice')
+      ]
+      f = Function(name = functionName,
+                   args = args,
+                   implementation = functionImplementation,
+                   description = description)
+      f.transform = transform
+      f.transformFunctionArgs = [tID, transform, f]
+      self.functions[functionName] = f
+      transform['owner'].transformations.append((tID, transform))
   
 

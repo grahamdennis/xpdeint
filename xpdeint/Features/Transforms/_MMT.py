@@ -147,15 +147,14 @@ class _MMT (_Transform):
     sortedDimNames.sort()
     sortedDimNames = [o[1] for o in sortedDimNames]
     # Create all transforms just for each dimension individually
-    # These transforms require an additional copy either at the start or end as there is no
-    # in-place matrix multiply.
     for dimName in sortedDimNames:
       dimReps = geometry.dimensionWithName(dimName).representations
       for basisReps in combinations(2, dimReps):
         results.append(dict(
-          transformations = [frozenset(rep.name for rep in basisReps)],
+          transformations = [tuple(rep.name for rep in basisReps)],
           cost = reduce(operator.mul, [rep.lattice for rep in basisReps]),
-          outOfPlace = True
+          outOfPlace = True,
+          transformFunction = self.basisMap[dimName].transformFunction,
         ))
     
     return results
