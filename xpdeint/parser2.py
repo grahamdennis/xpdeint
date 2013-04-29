@@ -366,9 +366,8 @@ def main(argv=None):
     lineNumber = err.lineNumber
     columnNumber = err.columnNumber
     print >> sys.stderr, err.msg
-    print >> sys.stderr, ''
     if not lineNumber == None:
-      positionReference =  ["Error caused at line %(lineNumber)i" % locals()]
+      positionReference =  ["    Error caused at line %(lineNumber)i" % locals()]
       if not columnNumber == None:
         positionReference.append(", column %(columnNumber)i" % locals())
       positionReference.append(":\n")
@@ -376,14 +375,11 @@ def main(argv=None):
       if not columnNumber == None:
           positionReference.append(" "*(columnNumber-1) + "^~~ here.")
       print >> sys.stderr, ''.join(positionReference)
-      print >> sys.stderr, ''
     if debug:
       if err.element:
-        print >> sys.stderr, "In element: " + err.element.userUnderstandableXPath()
-        print >> sys.stderr, ''
+        print >> sys.stderr, "    In element: " + err.element.userUnderstandableXPath()
       else:
-        print >> sys.stderr, "Unknown element. Please report this error to %s" % globalNameSpace['bugReportAddress']
-        print >> sys.stderr, ''
+        print >> sys.stderr, "    Unknown element. Please report this error to %s" % globalNameSpace['bugReportAddress']
     
     # If we have the debug option on, then in addition to the path to the XML element
     # that triggered the exception, print a traceback showing the list of Python function
