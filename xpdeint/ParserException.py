@@ -58,6 +58,5 @@ def parserWarning(element, msg):
     warningsGiven.add((lineNumber, columnNumber, msg))
     print >> sys.stderr, indentMessageWithPrefix('WARNING: ', msg)
     print >> sys.stderr, "    At line %(lineNumber)i, column %(columnNumber)i" % locals()
-    print >> sys.stderr, ''
     # print >> sys.stderr, "    In element: " + element.userUnderstandableXPath()
 
