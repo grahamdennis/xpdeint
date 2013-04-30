@@ -93,6 +93,9 @@ def anyObject(iterable):
     return obj
 
 def degsOutput(err, globalNameSpace):
+  """
+  Format the output for DEGS in case of parsing error
+  """
   lineNumber = err.lineNumber
   columnNumber = err.columnNumber
   err.msg = '\n' + err.msg + '\n'
