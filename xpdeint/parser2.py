@@ -76,6 +76,7 @@ Options and arguments:
                                   This option is only meaningful when used with --(re)configure
 --lib-path /path/to/lib         : Add the path /path/to/lib to the list of paths searched for libraries
                                   This option is only meaningful when used with --(re)configure
+-d                              : DEGS mode (also --degs)
 '''
 
 def fileContentsHash(filename):
@@ -91,6 +92,27 @@ def anyObject(iterable):
   for obj in iterable:
     return obj
 
+def degsOutput(err, globalNameSpace):
+  """
+  Format the output for DEGS in case of parsing error
+  """
+  lineNumber = err.lineNumber
+  columnNumber = err.columnNumber
+  err.msg = '\n' + err.msg + '\n'
+  print >> sys.stderr, err.msg
+  if not lineNumber == None:
+    positionReference =  ["Error caused at line %(lineNumber)i" % locals()]
+    if not columnNumber == None:
+      positionReference.append(", column %(columnNumber)i" % locals())
+    positionReference.append(":\n")
+    positionReference.append(globalNameSpace['inputScript'].splitlines(True)[lineNumber-1])
+    if not columnNumber == None:
+        positionReference.append(" "*(columnNumber-1) + "^~~ here.")
+    print >> sys.stderr, ''.join(positionReference) + '\n'
+  if err.element:
+    print >> sys.stderr, "In element: " + err.element.userUnderstandableXPath()
+  else:
+    print >> sys.stderr, "Unknown element. Please report this error to %s" % globalNameSpace['bugReportAddress']
 
 class Usage(Exception):
   """
@@ -108,6 +130,9 @@ def main(argv=None):
   # where the error occurred.
   debug = False
   verbose = False
+  # degs is off by default
+  # If degs is true then the output in case of error is formatted for parsing by DEGS
+  degs = False
   
   compileScript = True
   noVersionInformation = False
@@ -130,7 +155,7 @@ def main(argv=None):
     try:
       opts, args = getopt.gnu_getopt(
                     argv[1:],
-                    "gvhno:",
+                    "gdvhno:",
                     [
                       "debug",
                       "verbose",
@@ -142,7 +167,8 @@ def main(argv=None):
                       "reconfigure",
                       "include-path=",
                       "lib-path=",
-                      "waf-verbose"
+                      "waf-verbose",
+                      "degs"
                     ]
       )
       del sys.argv[1:]
@@ -161,6 +187,8 @@ def main(argv=None):
         debug = verbose = True
       elif option in ('-v', '--verbose'):
         verbose = True
+      elif option in ('-d', '--degs'):
+        degs = True
       elif option == "--waf-verbose":
         Configuration.Logs.verbose = 3
       elif option in ("-h", "--help"):
@@ -361,7 +389,10 @@ def main(argv=None):
   # If there was an exception during parsing or preflight, a ParserException should have been
   # raised. The ParserException knows the XML element that triggered the exception, and the 
   # error string that should be presented to the user.
-  except ParserException, err:  
+  except ParserException, err: 
+    if degs:
+      degsOutput(err, globalNameSpace)
+      return -1
     # Print the error to the user
     lineNumber = err.lineNumber
     columnNumber = err.columnNumber
